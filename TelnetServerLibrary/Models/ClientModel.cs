@@ -1,49 +1,40 @@
+#nullable enable
 using System;
 using System.Net;
+using TelnetServerLibrary.Models;
 
 
-namespace TelnetServer
+namespace TelnetServerLibrary
 {
-    public enum CLIENT_STATUS
-    {
-        /// <summary>
-        /// Unauthenticated client.
-        /// </summary>
-        GUEST = 0,
-        /// <summary>
-        /// Client is authenticating.
-        /// </summary>
-        AUTHENTICATING = 1,
-        /// <summary>
-        /// Client is logged in.
-        /// </summary>
-        LOGGED_IN = 2
-    }
-
-    public class Client
+    internal sealed class ClientModel : IClientModel
     {
         #region Class fields
         /// <summary>
         /// Client's identifier.
         /// </summary>
-        internal uint ClientID { get; set; }
+        public uint ClientID { get; private set; }
 
         /// <summary>
         /// Connection datetime.
         /// </summary>
-        private readonly DateTime m_connectedAt;
+        internal DateTime ConnectTime { get; private set; }
+
+        /// <summary>
+        /// Last time client had activity.
+        /// </summary>
+        internal DateTime LastActivity { get; private set; }
         #endregion
 
         /// <summary>
-        /// Initialize a new instance of the <see cref="Client"/> class.
+        /// Initialize a new instance of the <see cref="ClientModel"/> class.
         /// </summary>
         /// <param name="clientId">The client's identifier.</param>
         /// <param name="remoteAddress">The remote address.</param>
-        public Client(uint clientId, IPEndPoint remoteAddress)
+        internal ClientModel(uint clientId, IPEndPoint remoteAddress)
         {
             ClientID = clientId;
             RemoteAddress = remoteAddress;
-            m_connectedAt = DateTime.Now;
+            ConnectTime = DateTime.Now;
             CurrentStatus = CLIENT_STATUS.GUEST;
             ReceivedData = string.Empty;
         }
@@ -58,28 +49,36 @@ namespace TelnetServer
         /// Get or set the client's current status.
         /// </summary>
         /// <returns>The client's status.</returns>
-        public CLIENT_STATUS CurrentStatus { get; internal set; }
+        public CLIENT_STATUS CurrentStatus { get; set; }
 
         /// <summary>
         /// Get or set the client's last received data.
         /// </summary>
-        public string ReceivedData { get; internal set; } = string.Empty;
+        internal string ReceivedData { get; set; } = string.Empty;
 
         /// <summary>
         /// Append a string to the client's last received data.
         /// </summary>
         /// <param name="dataToAppend">The data to append.</param>
-        public void AppendReceivedData(string dataToAppend) => ReceivedData += dataToAppend;
+        internal void AppendReceivedData(string dataToAppend)
+        {
+            ReceivedData += dataToAppend;
+            LastActivity = DateTime.Now;
+        }
 
         /// <summary>
         /// Remove the last character from the client's last received data.
         /// </summary>
-        public void RemoveLastCharacterReceived() => ReceivedData = ReceivedData[0..^1];
+        internal void RemoveLastCharacterReceived()
+        {
+            ReceivedData = ReceivedData[0..^1];
+            LastActivity = DateTime.Now;
+        }
 
         public override string ToString()
         {
             string ip = string.Format($"{RemoteAddress.Address}:{RemoteAddress.Port}");
-            string res = string.Format($"Client #{ClientID} (From: {ip}, Status: {CurrentStatus}, Connected at: {m_connectedAt})");
+            string res = string.Format($"Client #{ClientID} (From: {ip}, Status: {CurrentStatus}, Connected at: {ConnectTime})");
             return res;
         }
     }

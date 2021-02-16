@@ -1,12 +1,13 @@
 using System;
 using System.Net;
-
+using TelnetServerLibrary;
+using TelnetServerLibrary.Models;
 
 namespace TelnetServer
 {
     public class Program
     {
-        private static readonly Server s_server = new Server(IPAddress.Any);
+        private static readonly ITelnetServer s_server = new Server(IPAddress.Any);
 
         static void Main(string[] args)
         {
@@ -17,62 +18,72 @@ namespace TelnetServer
 
             s_server.Start();
 
-            Console.WriteLine($"SERVER STARTED ON: {DateTime.Now} (IP {IPAddress.Any})");
+            Console.WriteLine($"SERVER STARTED AT: {DateTime.Now} (IP {IPAddress.Any})");
+            Console.WriteLine("Type 'Q' to quit or 'B' to broadcast a message.");
 
-            char read = Console.ReadKey(true).KeyChar;
+            ConsoleKey read = ConsoleKey.NoName;
 
             do
             {
-                if (read.Equals('b'))
+                if (read == ConsoleKey.B)
+                {
+                    Console.WriteLine("Enter broadcast message:");
                     s_server.SendMessageToAll(Console.ReadLine());
-            } while ((read = Console.ReadKey(true).KeyChar) != 'q');
+                }
+            } while ((read = Console.ReadKey(true).Key) != ConsoleKey.Q);
 
+            Console.WriteLine($"SERVER STOPPED AT {DateTime.Now}");
             s_server.Stop();
             s_server.Dispose();
         }
 
-        private static void ClientConnected(Client client)
+        private static void ClientConnected(object sender, IClientModel client)
         {
             Console.WriteLine("CONNECTED: " + client);
-            s_server.SendMessageToClient(client, $"Telnet Server{Environment.NewLine}Login: ");
+            s_server.SendMessageToClient(client, $"Telnet Server{Server.CRLF}Login: ");
         }
 
-        private static void ClientDisconnected(Client client) => Console.WriteLine("DISCONNECTED: " + client);
+        private static void ClientDisconnected(object sender, IClientModel client) => Console.WriteLine("DISCONNECTED: " + client);
 
-        private static void ConnectionBlocked(IPEndPoint? endPoint) =>
+        private static void ConnectionBlocked(object sender, IPEndPoint? endPoint) =>
             Console.WriteLine(string.Format($"BLOCKED: {endPoint?.Address}:{endPoint?.Port} at {DateTime.Now}"));
 
-        private static void MessageReceived(Client client, string message)
+        private static void MessageReceived(object sender, MessageReceivedEventArgs args)
         {
-            if (client.CurrentStatus != CLIENT_STATUS.LOGGED_IN)
+            if (args.ClientInstance.CurrentStatus != CLIENT_STATUS.LOGGED_IN)
             {
-                HandleLogin(client, message);
+                HandleLogin(args.ClientInstance, args.ReceivedData);
                 return;
             }
 
-            Console.WriteLine("MESSAGE: " + message);
+            Console.WriteLine("MESSAGE: " + args.ReceivedData);
 
-            if (message.Equals("kickmyass") || message.Equals("logout") || message.Equals("exit"))
+            switch (args.ReceivedData)
             {
-                s_server.SendMessageToClient(client, Environment.NewLine + Server.CURSOR);
-                s_server.KickClient(client);
+                case "q":
+                case "quit":
+                case "lo":
+                case "logout":
+                case "exit":
+                    s_server.KickClient(args.ClientInstance);
+                    break;
+                case "clear":
+                    s_server.ClearClientScreen(args.ClientInstance);
+                    s_server.SendMessageToClient(args.ClientInstance, Server.CURSOR);
+                    break;
+                default:
+                    s_server.SendMessageToClient(args.ClientInstance, Server.CRLF + Server.CURSOR);
+                    break;
             }
-            else if (message.Equals("clear"))
-            {
-                s_server.ClearClientScreen(client);
-                s_server.SendMessageToClient(client, Server.CURSOR);
-            }
-            else
-                s_server.SendMessageToClient(client, Environment.NewLine + Server.CURSOR);
         }
 
-        private static void HandleLogin(Client client, string message)
+        private static void HandleLogin(IClientModel client, string message)
         {
             if (client.CurrentStatus == CLIENT_STATUS.GUEST)
             {
                 if (message.Equals("root"))
                 {
-                    s_server.SendMessageToClient(client, Environment.NewLine + "Password: ");
+                    s_server.SendMessageToClient(client, Server.CRLF + "Password: ");
                     client.CurrentStatus = CLIENT_STATUS.AUTHENTICATING;
                 }
                 else
@@ -83,7 +94,8 @@ namespace TelnetServer
                 if (message.Equals("r00t"))
                 {
                     s_server.ClearClientScreen(client);
-                    s_server.SendMessageToClient(client, $"Successfully authenticated.{Environment.NewLine}{Server.CURSOR}");
+                    s_server.SendMessageToClient(client, $"Successfully authenticated. There are {s_server.ConnectionCount - 1} other users online.");
+                    s_server.SendMessageToClient(client, Server.CRLF + Server.CURSOR);
                     client.CurrentStatus = CLIENT_STATUS.LOGGED_IN;
                 }
                 else

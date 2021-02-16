@@ -1,35 +1,35 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Timers;
+using TelnetServerLibrary.Models;
 
-
-namespace TelnetServer
+namespace TelnetServerLibrary
 {
-    public delegate void ConnectionEventHandler(Client client);
-    public delegate void ConnectionBlockedEventHandler(IPEndPoint? endPoint);
-    public delegate void MessageReceivedEventHandler(Client client, string message);
-
-    public class Server : IDisposable
+    public class Server : ITelnetServer
     {
         #region Class fields
-        /// <summary>
-        /// Telnet default port.
-        /// </summary>
-        private const int PORT = 23;
+        public const string CRLF = "\r\n";
 
         /// <summary>
         /// End of line constant.
         /// </summary>
-        public const string CURSOR = " > ";
+        public const string CURSOR = "> ";
+
+        // Telnet constants.
         private const int TELNET_IAC = 0xff; // Telnet Interpret As Command byte.
         private const int TELNET_DO = 0xfd;
         private const int TELNET_WILL = 0xfb;
         private const int TELNET_ECHO = 0x01;                // RFC 857
         private const int TELNET_SUPPRESS_GO_AHEAD = 0x03;   // RFC 858
         private const int TELNET_TOGGLE_FLOW_CONTROL = 0x21; // RFC 1080
+
+        private const int CLIENT_TIMEOUT_MINS = 15;
+        private const int MAX_CONNECTIONS = 100;
 
         private bool m_alreadyDisposed;
 
@@ -39,9 +39,19 @@ namespace TelnetServer
         private readonly Socket m_serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
         /// <summary>
-        /// IP on which to listen.
+        /// Client inactivity timer.
+        /// </summary>
+        private readonly Timer m_timeoutTimer = new Timer(TimeSpan.FromMinutes(1).TotalMilliseconds) { AutoReset = true };
+
+        /// <summary>
+        /// IP address on which to listen.
         /// </summary>
         private readonly IPAddress m_ip;
+
+        /// <summary>
+        /// Port to listen on.
+        /// </summary>
+        private readonly int m_port;
 
         /// <summary>
         /// Default data size for received data.
@@ -54,35 +64,31 @@ namespace TelnetServer
         private readonly byte[] m_data;
 
         /// <summary>
-        /// <see langword="true"/> for allowing incoming connections;
-        /// <see langword="false"/> otherwise.
-        /// </summary>
-        private bool m_acceptIncomingConnections;
-
-        /// <summary>
         /// All connected clients indexed by their socket.
         /// </summary>
-        private readonly Dictionary<Socket, Client> m_clients = new Dictionary<Socket, Client>();
+        private readonly Dictionary<Socket, ClientModel> m_clients = new Dictionary<Socket, ClientModel>();
 
         /// <summary>
-        /// Occurs when a client is connected.
+        /// Occurs when a client is connected/disconnected.
         /// </summary>
-        public event ConnectionEventHandler ClientConnected;
-
-        /// <summary>
-        /// Occurs when a client is disconnected.
-        /// </summary>
-        public event ConnectionEventHandler ClientDisconnected;
+        public event EventHandler<IClientModel> ClientConnected, ClientDisconnected;
 
         /// <summary>
         /// Occurs when an incoming connection is blocked.
         /// </summary>
-        public event ConnectionBlockedEventHandler ConnectionBlocked;
+        public event EventHandler<IPEndPoint> ConnectionBlocked;
 
         /// <summary>
         /// Occurs when a message is received.
         /// </summary>
-        public event MessageReceivedEventHandler MessageReceived;
+        public event EventHandler<MessageReceivedEventArgs> MessageReceived;
+
+        /// <summary>
+        /// <see langword="true"/> enables incoming socket connections.
+        /// </summary>
+        public bool AcceptConnections { get; private set; } = true;
+
+        public int ConnectionCount => m_clients.Count;
         #endregion
 
         /// <summary>
@@ -90,12 +96,13 @@ namespace TelnetServer
         /// </summary>
         /// <param name="ip">The IP on which to listen to.</param>
         /// <param name="dataSize">Data size for received data.</param>
-        public Server(IPAddress ip, int dataSize = 1024)
+        public Server(IPAddress ip, int port = 23, int dataSize = 1024)
         {
             m_ip = ip;
+            m_port = port;
             m_dataSize = dataSize;
             m_data = new byte[dataSize];
-            m_acceptIncomingConnections = true;
+            m_timeoutTimer.Elapsed += new ElapsedEventHandler(OnTimedEvent);
         }
 
         /// <summary>
@@ -103,9 +110,10 @@ namespace TelnetServer
         /// </summary>
         public void Start()
         {
-            m_serverSocket.Bind(new IPEndPoint(m_ip, PORT));
+            m_serverSocket.Bind(new IPEndPoint(m_ip, m_port));
             m_serverSocket.Listen(0);
             m_serverSocket.BeginAccept(new AsyncCallback(HandleIncomingConnection), m_serverSocket);
+            m_timeoutTimer.Start();
         }
 
         /// <summary>
@@ -114,38 +122,24 @@ namespace TelnetServer
         public void Stop() => m_serverSocket.Close();
 
         /// <summary>
-        /// Return whether incoming connections are allowed.
-        /// </summary>
-        /// <returns>True is connections are allowed;
-        /// false otherwise.</returns>
-        public bool IncomingConnectionsAllowed() => m_acceptIncomingConnections;
-
-        /// <summary>
-        /// Deny incoming connections.
-        /// </summary>
-        public void DenyIncomingConnections() => m_acceptIncomingConnections = false;
-
-        /// <summary>
-        /// Allow the incoming connections.
-        /// </summary>
-        public void AllowIncomingConnections() => m_acceptIncomingConnections = true;
-
-        /// <summary>
         /// Clear the screen for the specified client.
         /// </summary>
         /// <param name="c">The client on which
         /// to clear the screen.</param>
-        public void ClearClientScreen(Client c) => SendMessageToClient(c, "\u001B[1J\u001B[H");
+        public void ClearClientScreen(IClientModel c) => SendMessageToClient(c, "\u001B[1J\u001B[H");
 
         /// <summary>
         /// Send a text message to the specified client.
         /// </summary>
         /// <param name="c">The client.</param>
         /// <param name="message">The message.</param>
-        public void SendMessageToClient(Client c, string message)
+        public void SendMessageToClient(IClientModel c, string? message)
         {
-            Socket? clientSocket = GetSocketByClient(c);
-            SendMessageToSocket(clientSocket, message);
+            if (!string.IsNullOrEmpty(message))
+            {
+                Socket? clientSocket = GetSocketByClient(c);
+                SendMessageToSocket(clientSocket, message);
+            }
         }
 
         /// <summary>
@@ -178,11 +172,11 @@ namespace TelnetServer
             foreach (Socket s in m_clients.Keys)
                 try
                 {
-                    Client client = m_clients[s];
+                    ClientModel client = m_clients[s];
 
                     if (client.CurrentStatus == CLIENT_STATUS.LOGGED_IN)
                     {
-                        SendMessageToSocket(s, Environment.NewLine + message + Environment.NewLine + CURSOR);
+                        SendMessageToSocket(s, CRLF + message + CRLF + CURSOR);
                         client.ReceivedData = string.Empty;
                     }
                 }
@@ -199,9 +193,9 @@ namespace TelnetServer
         /// <param name="clientSocket">The client's socket.</param>
         /// <returns>If the socket is found, the client instance
         /// is returned; otherwise <see langword="null"/> is returned.</returns>
-        private Client? GetClientBySocket(Socket? clientSocket)
+        private ClientModel? GetClientBySocket(Socket? clientSocket)
         {
-            Client? client = null;
+            ClientModel? client = null;
             if (clientSocket != null)
                 _ = m_clients.TryGetValue(clientSocket, out client);
             return client;
@@ -213,7 +207,7 @@ namespace TelnetServer
         /// <param name="client">The client instance.</param>
         /// <returns>If the client is found, the socket is
         /// returned; otherwise null is returned.</returns>
-        private Socket? GetSocketByClient(Client client)
+        private Socket? GetSocketByClient(IClientModel client)
         {
             Socket? s = m_clients.FirstOrDefault(x => x.Value.ClientID == client.ClientID).Key;
             return s;
@@ -223,10 +217,11 @@ namespace TelnetServer
         /// Kick the specified client from the server.
         /// </summary>
         /// <param name="client">The client.</param>
-        public void KickClient(Client client)
+        public void KickClient(IClientModel client)
         {
+            SendMessageToClient(client, CRLF + "You are being logged off. Goodbye!");
             CloseSocket(GetSocketByClient(client));
-            ClientDisconnected(client);
+            ClientDisconnected(this, client); // Fire event.
         }
 
         /// <summary>
@@ -254,12 +249,12 @@ namespace TelnetServer
                 Socket? oldSocket = (Socket?)result.AsyncState;
                 if (oldSocket == null) return;
 
-                if (m_acceptIncomingConnections)
+                if (AcceptConnections)
                 {
                     Socket newSocket = oldSocket.EndAccept(result);
 
                     var clientID = (uint)m_clients.Count + 1;
-                    var client = new Client(clientID, (IPEndPoint)newSocket.RemoteEndPoint!);
+                    var client = new ClientModel(clientID, (IPEndPoint)newSocket.RemoteEndPoint!);
                     m_clients.Add(newSocket, client);
 
                     SendBytesToSocket(
@@ -273,12 +268,12 @@ namespace TelnetServer
                     );
 
                     client.ReceivedData = string.Empty;
-                    ClientConnected(client);
+                    ClientConnected(this, client);
                     m_serverSocket.BeginAccept(new AsyncCallback(HandleIncomingConnection), m_serverSocket);
                 }
                 else
                 {
-                    ConnectionBlocked((IPEndPoint?)oldSocket.RemoteEndPoint);
+                    ConnectionBlocked(this, (IPEndPoint?)oldSocket.RemoteEndPoint);
                 }
             }
             catch (Exception ex)
@@ -322,14 +317,14 @@ namespace TelnetServer
                 }
                 else if (m_data[0] < 0xF0)
                 {
-                    Client? client = GetClientBySocket(clientSocket);
+                    ClientModel? client = GetClientBySocket(clientSocket);
                     string receivedData = client!.ReceivedData;
 
                     // 0x2E = '.', 0x0D = carriage return, 0x0A = new line
                     if ((m_data[0] == 0x2E && m_data[1] == 0x0D && receivedData.Length == 0) || (m_data[0] == 0x0D && m_data[1] == 0x0A))
                     {
                         //sendMessageToSocket(clientSocket, "\u001B[1J\u001B[H");
-                        MessageReceived(client, client.ReceivedData);
+                        MessageReceived(this, new MessageReceivedEventArgs { ClientInstance = client, ReceivedData = client.ReceivedData });
                         client.ReceivedData = string.Empty;
                     }
                     else
@@ -375,6 +370,15 @@ namespace TelnetServer
             }
         }
 
+        private void OnTimedEvent(object source, ElapsedEventArgs e)
+        {
+            foreach (var client in m_clients)
+                if (DateTime.Now - client.Value.LastActivity > TimeSpan.FromMinutes(CLIENT_TIMEOUT_MINS))
+                    KickClient(client.Value);
+
+            AcceptConnections = m_clients.Count <= MAX_CONNECTIONS;
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!m_alreadyDisposed)
@@ -383,6 +387,8 @@ namespace TelnetServer
                 {
                     // TODO: dispose managed state (managed objects)
                     m_serverSocket?.Dispose();
+                    m_timeoutTimer.Elapsed -= OnTimedEvent;
+                    m_timeoutTimer.Dispose();
                 }
 
                 // TODO: free unmanaged resources (unmanaged objects) and override finalizer
