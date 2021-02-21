@@ -18,7 +18,7 @@ namespace TelnetServerLibrary
         /// <summary>
         /// End of line constant.
         /// </summary>
-        public const string CURSOR = "> ";
+        public const string CURSOR = "> ;";
 
         // Telnet constants.
         private const int TELNET_IAC = 0xff; // Telnet Interpret As Command byte.
@@ -28,8 +28,9 @@ namespace TelnetServerLibrary
         private const int TELNET_SUPPRESS_GO_AHEAD = 0x03;   // RFC 858
         private const int TELNET_TOGGLE_FLOW_CONTROL = 0x21; // RFC 1080
 
-        private const int CLIENT_TIMEOUT_MINS = 15;
-        private const int MAX_CONNECTIONS = 100;
+        public event EventHandler<IClientModel> ClientConnected, ClientDisconnected;
+        public event EventHandler<IPEndPoint> ConnectionBlocked;
+        public event EventHandler<MessageReceivedEventArgs> MessageReceived;
 
         private bool m_alreadyDisposed;
 
@@ -68,27 +69,13 @@ namespace TelnetServerLibrary
         /// </summary>
         private readonly Dictionary<Socket, ClientModel> m_clients = new Dictionary<Socket, ClientModel>();
 
-        /// <summary>
-        /// Occurs when a client is connected/disconnected.
-        /// </summary>
-        public event EventHandler<IClientModel> ClientConnected, ClientDisconnected;
-
-        /// <summary>
-        /// Occurs when an incoming connection is blocked.
-        /// </summary>
-        public event EventHandler<IPEndPoint> ConnectionBlocked;
-
-        /// <summary>
-        /// Occurs when a message is received.
-        /// </summary>
-        public event EventHandler<MessageReceivedEventArgs> MessageReceived;
-
-        /// <summary>
-        /// <see langword="true"/> enables incoming socket connections.
-        /// </summary>
         public bool AcceptConnections { get; private set; } = true;
 
+        public int ClientInactivityTimeout { get; set; } = 15;
+
         public int ConnectionCount => m_clients.Count;
+
+        public int MaxConnections { get; set; } = 100;
         #endregion
 
         /// <summary>
@@ -96,7 +83,7 @@ namespace TelnetServerLibrary
         /// </summary>
         /// <param name="ip">The IP on which to listen to.</param>
         /// <param name="dataSize">Data size for received data.</param>
-        public Server(IPAddress ip, int port = 23, int dataSize = 1024)
+        public Server(IPAddress ip, int port = 23, int dataSize = 128)
         {
             m_ip = ip;
             m_port = port;
@@ -115,11 +102,6 @@ namespace TelnetServerLibrary
             m_serverSocket.BeginAccept(new AsyncCallback(HandleIncomingConnection), m_serverSocket);
             m_timeoutTimer.Start();
         }
-
-        /// <summary>
-        /// Stop the server.
-        /// </summary>
-        public void Stop() => m_serverSocket.Close();
 
         /// <summary>
         /// Clear the screen for the specified client.
@@ -329,8 +311,7 @@ namespace TelnetServerLibrary
                     }
                     else
                     {
-                        // 0x08 => backspace character
-                        if (m_data[0] == 0x08)
+                        if (m_data[0] == 0x08) // 0x08 => backspace character
                         {
                             if (receivedData.Length > 0)
                             {
@@ -340,21 +321,16 @@ namespace TelnetServerLibrary
                             else
                                 clientSocket?.BeginReceive(m_data, 0, m_dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
                         }
-                        // 0x7F => delete character
-                        else if (m_data[0] == 0x7F)
+                        else if (m_data[0] == 0x7F) // 0x7F => delete character
                             clientSocket?.BeginReceive(m_data, 0, m_dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
                         else
                         {
                             client.AppendReceivedData(Encoding.ASCII.GetString(m_data, 0, bytesReceived));
 
-                            // Echo back the received character
-                            // if client is not writing any password
+                            // Echo back the received character if client is not typing a password.
                             if (client.CurrentStatus != CLIENT_STATUS.AUTHENTICATING)
                                 SendBytesToSocket(clientSocket, new byte[] { m_data[0] });
-
-                            // Echo back asterisks if client is
-                            // writing a password
-                            else
+                            else // Echo back asterisks if client is typing a password.
                                 SendMessageToSocket(clientSocket, "*");
 
                             clientSocket?.BeginReceive(m_data, 0, m_dataSize, SocketFlags.None, new AsyncCallback(ReceiveData), clientSocket);
@@ -373,10 +349,10 @@ namespace TelnetServerLibrary
         private void OnTimedEvent(object source, ElapsedEventArgs e)
         {
             foreach (var client in m_clients)
-                if (DateTime.Now - client.Value.LastActivity > TimeSpan.FromMinutes(CLIENT_TIMEOUT_MINS))
+                if (DateTime.Now - client.Value.LastActivity > TimeSpan.FromMinutes(ClientInactivityTimeout))
                     KickClient(client.Value);
 
-            AcceptConnections = m_clients.Count <= MAX_CONNECTIONS;
+            AcceptConnections = m_clients.Count <= MaxConnections;
         }
 
         protected virtual void Dispose(bool disposing)

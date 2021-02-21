@@ -24,8 +24,10 @@ namespace TelnetServerLibrary.Models
     public interface IClientModel
     {
         uint ClientID { get; }
-        IPEndPoint RemoteAddress { get; }
         CLIENT_STATUS CurrentStatus { get; set; }
+        uint LoginAttempts { get; set; }
+        IPEndPoint RemoteAddress { get; }
         string ToString();
+        short UserNo { get; set; }
     }
 }

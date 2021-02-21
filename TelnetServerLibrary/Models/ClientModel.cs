@@ -23,6 +23,10 @@ namespace TelnetServerLibrary
         /// Last time client had activity.
         /// </summary>
         internal DateTime LastActivity { get; private set; }
+
+        public uint LoginAttempts { get; set; }
+
+        public short UserNo { get; set; }
         #endregion
 
         /// <summary>
