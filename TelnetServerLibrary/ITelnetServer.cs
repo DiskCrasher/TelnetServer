@@ -7,12 +7,13 @@ using System.Text;
 using System.Threading.Tasks;
 using TelnetServerLibrary.Models;
 
+
 namespace TelnetServerLibrary
 {
     public sealed class MessageReceivedEventArgs : EventArgs
     {
         public IClientModel ClientInstance { get; set; }
-        public string ReceivedData { get; set; }
+        public string ReceivedData { get; set; } = "";
     }
 
     public interface ITelnetServer : IDisposable

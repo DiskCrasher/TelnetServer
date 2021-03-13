@@ -10,7 +10,7 @@ using TelnetServerLibrary.Models;
 
 namespace TelnetServerLibrary
 {
-    public class Server : ITelnetServer
+    public class TelnetServer : ITelnetServer
     {
         #region Class fields
         public const string CRLF = "\r\n";
@@ -18,7 +18,7 @@ namespace TelnetServerLibrary
         /// <summary>
         /// End of line constant.
         /// </summary>
-        public const string CURSOR = "> ;";
+        public const string CURSOR = "> ";
 
         // Telnet constants.
         private const int TELNET_IAC = 0xff; // Telnet Interpret As Command byte.
@@ -79,11 +79,11 @@ namespace TelnetServerLibrary
         #endregion
 
         /// <summary>
-        /// Initialize a new instance of the <see cref="Server"/> class.
+        /// Initialize a new instance of the <see cref="TelnetServer"/> class.
         /// </summary>
         /// <param name="ip">The IP on which to listen to.</param>
         /// <param name="dataSize">Data size for received data.</param>
-        public Server(IPAddress ip, int port = 23, int dataSize = 128)
+        public TelnetServer(IPAddress ip, int port = 23, int dataSize = 128)
         {
             m_ip = ip;
             m_port = port;

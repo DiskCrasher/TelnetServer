@@ -10,15 +10,19 @@ namespace TelnetServerLibrary.Models
         /// <summary>
         /// Unauthenticated client.
         /// </summary>
-        GUEST = 0,
+        GUEST,
         /// <summary>
         /// Client is authenticating.
         /// </summary>
-        AUTHENTICATING = 1,
+        AUTHENTICATING,
         /// <summary>
         /// Client is logged in.
         /// </summary>
-        LOGGED_IN = 2
+        LOGGED_IN,
+        /// <summary>
+        /// Client is a new user.
+        /// </summary>
+        NEW_USER,
     }
 
     public interface IClientModel
